@@ -14,6 +14,7 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -27,6 +28,7 @@ from pydantic import BaseModel, Field
 from fastapi.exceptions import RequestValidationError
 
 from schemasnap.extractor import extract_from_html, ExtractResult
+from schemasnap.security import client_ip_from_forwarded
 from schemasnap.compressor import process_html
 from schemasnap.schema_snap import parse_page
 
@@ -69,13 +71,14 @@ _RATE_WINDOW_SEC = int(os.environ.get("SCHEMASNAP_RATE_WINDOW", "86400"))
 
 _rate_buckets: Dict[str, List[float]] = {}
 
+logger = logging.getLogger(__name__)
+
 
 def _get_client_ip(request: Request) -> str:
-    """Extract real client IP from GCP Cloud Run headers."""
+    """Extract client IP behind GCP Cloud Run / reverse proxies."""
     forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    fallback = request.client.host if request.client else "unknown"
+    return client_ip_from_forwarded(forwarded, fallback)
 
 
 def _check_rate_limit(client_ip: str) -> bool:
@@ -184,9 +187,10 @@ async def extract(request: Request, body: ExtractRequest):
     )
 
     if result.error:
+        logger.warning("extraction failed: %s", result.error)
         return JSONResponse(
             status_code=422,
-            content={"error": "extraction_failed", "detail": result.error},
+            content={"error": "extraction_failed"},
         )
 
     return result.to_dict()
@@ -218,9 +222,10 @@ async def compress(request: Request, body: CompressRequest):
     })
 
     if result.error:
+        logger.warning("compression failed: %s", result.error)
         return JSONResponse(
             status_code=422,
-            content={"error": "compression_failed", "detail": result.error},
+            content={"error": "compression_failed"},
         )
 
     return result.to_dict()

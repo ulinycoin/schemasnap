@@ -8,6 +8,8 @@ into a single call. Designed as the engine behind the /v1/extract API.
 from __future__ import annotations
 
 import ipaddress
+import logging
+import socket
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -27,6 +29,38 @@ _PRIVATE_NETS = [
     ipaddress.ip_network("0.0.0.0/8"),
 ]
 
+_BLOCKED_HOSTNAMES = frozenset({
+    "localhost",
+    "metadata",
+    "metadata.google.internal",
+})
+
+logger = logging.getLogger(__name__)
+
+
+def _ip_in_private_nets(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(ip in net for net in _PRIVATE_NETS)
+
+
+def _resolve_hostname_ips(hostname: str) -> List[str]:
+    """Resolve hostname to unique IP strings (IPv4 and IPv6)."""
+    seen: set[str] = set()
+    for info in socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP):
+        seen.add(info[4][0])
+    return list(seen)
+
+
+def _validate_resolved_ips(hostname: str) -> str:
+    """Block hostnames that resolve to private/link-local IPs."""
+    try:
+        for ip_str in _resolve_hostname_ips(hostname):
+            ip = ipaddress.ip_address(ip_str)
+            if _ip_in_private_nets(ip):
+                return f"Blocked: resolves to private IP ({ip_str})"
+    except socket.gaierror:
+        return f"DNS resolution failed: {hostname}"
+    return ""
+
 
 def validate_url(url: str) -> str:
     """Validate and sanitize a URL. Returns error message or empty string on success."""
@@ -38,16 +72,18 @@ def validate_url(url: str) -> str:
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         return "Invalid URL: no hostname"
+    if hostname in _BLOCKED_HOSTNAMES or hostname.endswith(".internal"):
+        return "Blocked: internal hostname"
     if hostname in ("localhost", "0.0.0.0", "[::1]", "::1"):
         return "Blocked: localhost"
     try:
         ip = ipaddress.ip_address(hostname)
-        for net in _PRIVATE_NETS:
-            if ip in net:
-                return f"Blocked: private/internal IP ({ip})"
+        if _ip_in_private_nets(ip):
+            return f"Blocked: private/internal IP ({ip})"
+        return ""
     except ValueError:
-        pass  # Not an IP — hostname, fine
-    return ""
+        pass
+    return _validate_resolved_ips(hostname)
 
 
 @dataclass
@@ -182,6 +218,14 @@ def extract_from_url(
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
 
+                # Post-navigation SSRF guard (redirect / DNS rebind)
+                final_host = (urlparse(page.url).hostname or "").lower()
+                if final_host:
+                    redirect_error = validate_url(page.url)
+                    if redirect_error:
+                        result.error = redirect_error
+                        return result
+
                 if wait_for_selector:
                     page.wait_for_selector(wait_for_selector, timeout=timeout_ms)
 
@@ -212,8 +256,9 @@ def extract_from_url(
             finally:
                 browser.close()
 
-    except Exception as exc:
-        result.error = str(exc)
+    except Exception:
+        logger.exception("extract_from_url failed for %s", url)
+        result.error = "extraction failed"
 
     result.elapsed_ms = (time.monotonic() - t0) * 1000
     return result
