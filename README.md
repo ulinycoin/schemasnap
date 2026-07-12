@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/schemasnap.svg)](https://pypi.org/project/schemasnap/)
 [![Python](https://img.shields.io/pypi/pyversions/schemasnap.svg)](https://pypi.org/project/schemasnap/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![tests](https://img.shields.io/badge/tests-51%20passed-brightgreen)](https://github.com/ulinycoin/schemasnap/actions)
+[![tests](https://img.shields.io/badge/tests-54%20passed-brightgreen)](https://github.com/ulinycoin/schemasnap/actions)
 
 **HTML → typed tables, forms, lists as JSON. 30ms, no key, no browser.**
 
@@ -34,6 +34,9 @@ curl -X POST https://schemasnap-464919960073.us-central1.run.app/v1/compress \
 ```bash
 pip install schemasnap
 
+# For MCP (Cursor, Claude Desktop)
+pip install "schemasnap[mcp]"
+
 # For URL extraction (requires Playwright)
 pip install "schemasnap[browser]"
 playwright install chromium
@@ -53,6 +56,26 @@ print(result.forms)       # [{action, method, fields}]
 print(result.lists)       # [{type, items, total}]
 print(result.token_budget) # {raw_bytes, compressed_bytes, compression_ratio}
 ```
+
+### MCP (Cursor, Claude Desktop)
+
+```bash
+pip install "schemasnap[mcp]"
+```
+
+Add to Cursor **Settings → MCP**:
+
+```json
+{
+  "mcpServers": {
+    "schemasnap": {
+      "command": "schemasnap-mcp"
+    }
+  }
+}
+```
+
+**Tool:** `compress_html(html, max_rows_per_table=50, url="")` → typed tables, forms, lists, actions.
 
 ### curl (no Python needed)
 
@@ -99,7 +122,7 @@ Composable: `Firecrawl fetch → SchemaSnap parse`. Or `curl → SchemaSnap pars
 
 SchemaSnap started as `schema_snap.py` inside [shadow-web](https://github.com/ulinycoin/shadow-web) — a broader agent-facing web interaction suite. This standalone version:
 
-- Removes MCP server, security scan, self-healing, form fill, browser-use integration
+- Adds MCP server (`compress_html` tool) for Cursor / Claude Desktop
 - Inlines semantic grouping (no external dependency)
 - Fixes tree mutation bug during tag removal
 - Adds deterministic type inference (8 types)

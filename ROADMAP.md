@@ -36,7 +36,7 @@
 
 ## Phase 4: Distribution (Week 6-8)
 
-- [ ] Cursor MCP integration (agent can call SchemaSnap natively)
+- [x] MCP server: `compress_html` tool (stdio, Cursor/Claude)
 - [ ] Claude plugin / MCP marketplace listing
 - [ ] Python SDK improvements: async API, batch extraction
 - [ ] `/v1/batch` endpoint — extract from multiple URLs in one request
