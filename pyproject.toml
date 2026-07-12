@@ -44,7 +44,7 @@ Repository = "https://github.com/ulinycoin/schemasnap"
 Issues = "https://github.com/ulinycoin/schemasnap/issues"
 
 [project.scripts]
-schemasnap-server = "schemasnap.server:app"
+schemasnap-server = "schemasnap.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
