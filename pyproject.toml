@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "schemasnap"
+version = "0.1.0"
+description = "Structured data extraction from any URL — tables, forms, lists as JSON. No API key needed."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "ulinycoin", email = "ulinycoin7@gmail.com" }]
+keywords = ["data-extraction", "web-scraping", "tables", "forms", "ai-agents", "llm", "playwright"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "lxml>=5.1.0",
+    "pydantic>=2.6.0",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.42.0"]
+server = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "playwright>=1.42.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "build>=1.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ulinycoin/schemasnap"
+Repository = "https://github.com/ulinycoin/schemasnap"
+Issues = "https://github.com/ulinycoin/schemasnap/issues"
+
+[project.scripts]
+schemasnap-server = "schemasnap.server:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: live browser + internet tests (run with pytest -m integration)",
+]
+addopts = "-m 'not integration'"
