@@ -103,7 +103,8 @@ class ErrorResponse(BaseModel):
 
 @app.get("/v1/health")
 async def health():
-    return {"status": "ok", "version": "0.1.0", "timestamp": time.time()}
+    from schemasnap import __version__
+    return {"status": "ok", "version": __version__, "timestamp": time.time()}
 
 
 @app.post("/v1/extract")
@@ -149,6 +150,17 @@ async def compress(request: Request, body: CompressRequest):
         max_rows_per_table=body.max_rows_per_table,
     )
 
+    # Track usage (fire-and-forget, non-blocking)
+    _posthog_capture("compress_request", {
+        "$ip": client_ip,
+        "url": body.url or "(inline)",
+        "html_bytes": len(body.html.encode("utf-8", errors="replace")),
+        "compression_ratio": result.compression_ratio,
+        "table_count": len(result.tables),
+        "form_count": len(result.forms),
+        "elapsed_ms": result.elapsed_ms,
+    })
+
     if result.error:
         return JSONResponse(
             status_code=422,
@@ -159,6 +171,34 @@ async def compress(request: Request, body: CompressRequest):
 
 
 # ── Startup ─────────────────────────────────────────────────────
+
+# PostHog — lightweight event capture (no SDK dep)
+_PH_KEY = os.environ.get("POSTHOG_API_KEY", "")
+_PH_HOST = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com")
+
+
+def _posthog_capture(event: str, properties: dict = None):
+    """Fire-and-forget PostHog event. Non-blocking."""
+    if not _PH_KEY:
+        return
+    try:
+        import urllib.request, json
+
+        payload = json.dumps({
+            "api_key": _PH_KEY,
+            "event": event,
+            "properties": properties or {},
+            "timestamp": time.time(),
+            "distinct_id": properties.get("$ip", "unknown") if properties else "unknown",
+        }).encode()
+        req = urllib.request.Request(
+            f"{_PH_HOST}/capture/",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=2)
+    except Exception:
+        pass  # never block on analytics failure
 
 def main():
     """Entry point for `schemasnap-server` CLI command."""
