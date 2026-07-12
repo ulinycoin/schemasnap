@@ -1,24 +1,28 @@
 # SchemaSnap
 
-**Structured data extraction from any URL — tables, forms, lists as JSON.**
+**HTML → typed tables, forms, lists as JSON. 30ms, no key, no browser.**
 
-Born from [shadow-web](https://github.com/ulinycoin/shadow-web)'s SchemaSnap module. Focused, standalone, and designed to be the API that AI agents (and humans) call when they need structured web data.
+Born from [shadow-web](https://github.com/ulinycoin/shadow-web)'s SchemaSnap module. A parse primitive — not a scraper, not a crawler. Feed it HTML, get structured data.
 
-```python
-from schemasnap import extract_from_url
-
-result = extract_from_url("https://en.wikipedia.org/wiki/List_of_countries_by_GDP")
-# result.tables[0] → {columns: ["Country", "GDP", ...], types: ["string", "currency", ...], rows: [[...], ...]}
-# result.forms   → [{action: "/search", method: "GET", fields: [...]}]
-# result.lists   → [{type: "unordered", items: ["Item 1", "Item 2"], total: 2}]
+```bash
+curl -X POST https://schemasnap-464919960073.us-central1.run.app/v1/compress \
+  -H "Content-Type: application/json" \
+  -d '{"html":"<table><thead><tr><th>Product</th><th>Price</th><th>Stock</th></tr></thead><tbody><tr><td>Widget</td><td>$19.99</td><td>150</td></tr></tbody></table>"}'
+```
+```json
+{"tables":[{"columns":["Product","Price","Stock"],
+  "types":["string","currency","integer"],
+  "rows":[["Widget","$19.99","150"]]}]}
 ```
 
-## What it does
+## Live API
 
-| Input | Output | Browser needed? |
-|-------|--------|----------------|
-| URL | Tables + Forms + Lists as JSON | Yes (Playwright) |
-| Raw HTML | Tables + Forms + Lists as JSON | No (lxml only) |
+| Endpoint | Rate limit | Auth |
+|----------|-----------|------|
+| `POST /v1/compress` — HTML → structured JSON | 50 req/day per IP | None |
+| `GET /v1/health` | Unlimited | None |
+
+**Base URL:** `https://schemasnap-464919960073.us-central1.run.app`
 
 ## Quick install
 
@@ -28,9 +32,6 @@ pip install schemasnap
 # For URL extraction (requires Playwright)
 pip install "schemasnap[browser]"
 playwright install chromium
-
-# For API server
-pip install "schemasnap[server]"
 ```
 
 ## Usage
@@ -38,50 +39,56 @@ pip install "schemasnap[server]"
 ### Python SDK
 
 ```python
-from schemasnap import extract_from_url, extract_from_html, parse_page
+from schemasnap import extract_from_html, parse_page
 
-# From URL (needs Playwright)
-result = extract_from_url("https://example.com/data")
-print(result.tables)      # [{columns, types, rows, total_rows, ...}]
-print(result.forms)       # [{action, method, fields: [{name, type, label, required}]}]
+# From HTML string (no browser, 30ms)
+result = extract_from_html(open("page.html").read())
+print(result.tables)      # [{columns, types, rows, total_rows}]
+print(result.forms)       # [{action, method, fields}]
 print(result.lists)       # [{type, items, total}]
 print(result.token_budget) # {raw_bytes, compressed_bytes, compression_ratio}
-
-# From HTML string (no browser)
-html = open("page.html").read()
-result = extract_from_html(html)
-print(result.tables)
 ```
 
-### API Server
+### curl (no Python needed)
 
 ```bash
-pip install "schemasnap[server]"
-uvicorn schemasnap.server:app --reload --port 8000
+curl -X POST https://schemasnap-464919960073.us-central1.run.app/v1/compress \
+  -H "Content-Type: application/json" \
+  -d '{"html": "<table>...your html...</table>"}'
 ```
 
-```bash
-# Extract from URL
-curl -X POST http://localhost:8000/v1/extract \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://en.wikipedia.org/wiki/List_of_countries_by_GDP"}'
+## Benchmarks
 
-# Compress HTML
-curl -X POST http://localhost:8000/v1/compress \
-  -H "Content-Type: application/json" \
-  -d '{"html": "<table>...", "url": "https://example.com"}'
+| Page | Raw | Compressed | Savings | Latency |
+|------|-----|-----------|---------|---------|
+| Wikipedia GDP | 641 KB | 215 KB | 66% | 256ms |
+| W3Schools Tables | 212 KB | 87 KB | 59% | 34ms |
+| Hacker News | 35 KB | 24 KB | 32% | 23ms |
 
-# Health check
-curl http://localhost:8000/v1/health
-```
+*Measured on Cloud Run (us-central1), July 2026. Cold start ~250ms.*
 
 ## Features
 
-- **Tables** → columns, types (string/integer/number/currency/percentage/date/email/url), rows, total_rows
-- **Forms** → action, method, fields with name, type, label, required, placeholder, options
-- **Lists** → type (unordered/ordered/select), items, total
-- **HTML compression** → 83-97% size reduction before extraction
-- **Semantic groups** → "Login Form", "Navigation", "Checkout" auto-detected
+- **Tables** → columns, types (`string|integer|number|currency|percentage|date|email|url`), rows, total_rows
+- **Forms** → action, method, fields with `name`, `type`, `label`, `required`, `placeholder`, `pattern`, `minlength`, select `options`
+- **Lists** → type (`unordered|ordered|select`), items, total
+- **Semantic groups** → "Login Form", "Navigation", "Checkout", "Search" auto-detected
+- **Deterministic** — same input → same output. No LLM guess, $0 per call
+
+## Competitive positioning
+
+SchemaSnap is a **parse primitive**, not a scraper:
+
+```
+Firecrawl / Jina     =  URL → content (crawl + render)
+Crawl4AI             =  URL → markdown (self-host crawl)
+pandas read_html()   =  HTML → strings (dev tool)
+SchemaSnap           =  HTML → typed structure (agent utility)
+```
+
+Composable: `Firecrawl fetch → SchemaSnap parse`. Or `curl → SchemaSnap parse`.
+
+**Honest limits:** HTML only (no JS render), layout tables skipped, no crawl, no proxy rotation.
 
 ## Relationship to shadow-web
 
@@ -89,9 +96,9 @@ SchemaSnap started as `schema_snap.py` inside [shadow-web](https://github.com/ul
 
 - Removes MCP server, security scan, self-healing, form fill, browser-use integration
 - Inlines semantic grouping (no external dependency)
-- Fixes the tree mutation bug during tag removal
-- Adds FastAPI server with rate limiting and input validation
-- Focuses entirely on one thing: URL → structured data
+- Fixes tree mutation bug during tag removal
+- Adds deterministic type inference (8 types)
+- Hardened for public API (SSRF guard, rate limiting, oversize protection)
 
 ## License
 
