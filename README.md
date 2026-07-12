@@ -1,5 +1,10 @@
 # SchemaSnap
 
+[![PyPI version](https://img.shields.io/pypi/v/schemasnap.svg)](https://pypi.org/project/schemasnap/)
+[![Python](https://img.shields.io/pypi/pyversions/schemasnap.svg)](https://pypi.org/project/schemasnap/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![tests](https://img.shields.io/badge/tests-51%20passed-brightgreen)](https://github.com/ulinycoin/schemasnap/actions)
+
 **HTML → typed tables, forms, lists as JSON. 30ms, no key, no browser.**
 
 Born from [shadow-web](https://github.com/ulinycoin/shadow-web)'s SchemaSnap module. A parse primitive — not a scraper, not a crawler. Feed it HTML, get structured data.
@@ -103,3 +108,7 @@ SchemaSnap started as `schema_snap.py` inside [shadow-web](https://github.com/ul
 ## License
 
 MIT
+
+---
+
+#web-scraping #data-extraction #ai-agents #html-parser #json-api #python #llm-tools
