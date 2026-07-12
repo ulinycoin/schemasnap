@@ -22,9 +22,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from schemasnap.extractor import extract_from_url, extract_from_html, ExtractResult
+from schemasnap.extractor import extract_from_html, ExtractResult
 from schemasnap.compressor import process_html
 from schemasnap.schema_snap import parse_page
+
+# extract_from_url requires Playwright — wrapped in lazy import
+_extract_from_url = None
+
+
+def _get_extract_from_url():
+    global _extract_from_url
+    if _extract_from_url is None:
+        try:
+            from schemasnap.extractor import extract_from_url as _fn
+            _extract_from_url = _fn
+        except ImportError:
+            _extract_from_url = False
+    return _extract_from_url
 
 app = FastAPI(
     title="SchemaSnap",
@@ -101,8 +115,12 @@ async def extract(request: Request, body: ExtractRequest):
 
     import asyncio
 
+    fn = _get_extract_from_url()
+    if not fn:
+        raise HTTPException(status_code=501, detail="/v1/extract unavailable: Playwright not installed")
+
     result = await asyncio.to_thread(
-        extract_from_url,
+        fn,
         body.url,
         timeout_ms=body.timeout_ms,
         max_rows_per_table=body.max_rows_per_table,
