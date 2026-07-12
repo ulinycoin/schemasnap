@@ -8,6 +8,9 @@ import re
 from lxml import html, etree
 from typing import Dict, List, Tuple, Any, Optional
 
+# Safe parser — no XXE, no network access (same as schema_snap.py)
+_SAFE_PARSER = html.HTMLParser(no_network=True)
+
 # Tags that are completely useless for LLMs and data extraction
 REMOVE_TAGS = {
     'script', 'style', 'noscript', 'iframe',
@@ -142,7 +145,7 @@ def process_html(html_text: str) -> Tuple[str, List[Dict[str, Any]]]:
     """
     if not html_text or not html_text.strip():
         return "", []
-    tree = html.fromstring(html_text)
+    tree = html.fromstring(html_text, parser=_SAFE_PARSER)
 
     # 1. Collect and remove non-content tags (fix: collect first, then remove)
     nodes_to_remove = []
