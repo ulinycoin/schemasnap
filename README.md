@@ -24,7 +24,7 @@ curl -X POST https://schemasnap-464919960073.us-central1.run.app/v1/compress \
 
 | Endpoint | Rate limit | Auth |
 |----------|-----------|------|
-| `POST /v1/compress` — HTML → structured JSON | 50 req/day per IP | None |
+| `POST /v1/compress` — HTML → structured JSON | 500 req/day per IP | None |
 | `GET /v1/health` | Unlimited | None |
 
 **Base URL:** `https://schemasnap-464919960073.us-central1.run.app`
