@@ -144,6 +144,284 @@ def _infer_column_type(values: List[str]) -> str:
 
 # -- Table extraction -----------------------------------------------------------
 
+_TABLE_ROLES = frozenset({"table", "grid"})
+_ROW_ROLE = "row"
+_CELL_ROLES = frozenset({"cell", "columnheader", "rowheader", "gridcell"})
+_TABLE_CLASS_RE = re.compile(
+    r"(?:^|\s)(?:table|min-w-full|divide-[xy]|caption-bottom)(?:\s|$)",
+    re.I,
+)
+_GRID_COLS_RE = re.compile(r"grid-cols-\d+", re.I)
+_ROW_CLASS_RE = re.compile(r"(?:^|\s)(?:row|table-row|Box-row)(?:\s|$)", re.I)
+
+
+def _element_class(el) -> str:
+    return el.get("class") or ""
+
+
+def _has_table_class_hint(el) -> bool:
+    return bool(_TABLE_CLASS_RE.search(_element_class(el)))
+
+
+def _has_grid_cols(el) -> bool:
+    return bool(_GRID_COLS_RE.search(_element_class(el)))
+
+
+def _role(el) -> str:
+    return (el.get("role") or "").lower()
+
+
+def _direct_element_children(el) -> List[Any]:
+    return [c for c in el if isinstance(c.tag, str)]
+
+
+def _finalize_table(
+    columns: List[str],
+    rows: List[List[str]],
+    *,
+    source: str = "native",
+) -> Optional[Dict[str, Any]]:
+    """Normalize dimensions, infer types, attach source metadata."""
+    if not rows and not columns:
+        return None
+
+    max_row_len = max((len(row) for row in rows), default=0)
+    max_cols = max(max_row_len, len(columns))
+    if max_cols < 2:
+        return None
+
+    if columns:
+        while len(columns) < max_cols:
+            columns.append(f"column_{len(columns) + 1}")
+    elif rows:
+        columns = [f"col_{i + 1}" for i in range(max_cols)]
+    else:
+        return None
+
+    types: List[str] = []
+    if columns and rows:
+        for col_idx in range(len(columns)):
+            col_values = [row[col_idx] if col_idx < len(row) else "" for row in rows]
+            types.append(_infer_column_type(col_values))
+    else:
+        types = ["string"] * len(columns)
+
+    return {
+        "columns": columns,
+        "types": types,
+        "rows": rows,
+        "total_rows": len(rows),
+        "column_count": len(columns),
+        "source": source,
+    }
+
+
+def _row_cells_from_element(row_el) -> List[str]:
+    """Extract cell text from a native <tr> or ARIA role=row element."""
+    if row_el.tag == "tr":
+        return [_text_or_empty(cell) for cell in row_el.xpath("./td | ./th")]
+
+    cells = row_el.xpath(
+        './*[@role="cell" or @role="columnheader" or @role="rowheader" or @role="gridcell"]'
+    )
+    if cells:
+        return [_text_or_empty(cell) for cell in cells]
+    return [_text_or_empty(cell) for cell in _direct_element_children(row_el)]
+
+
+def _rows_in_role_table(table_el) -> List[Any]:
+    """Collect role=row elements scoped to one table/grid root."""
+    scoped: List[Any] = []
+    for row in table_el.xpath('.//*[@role="row"]'):
+        ancestors = row.xpath('ancestor::*[@role="table" or @role="grid"]')
+        if ancestors and ancestors[0] is table_el:
+            scoped.append(row)
+    return scoped
+
+
+def _extract_role_table(table_el) -> Optional[Dict[str, Any]]:
+    """Parse ARIA table/grid (role=table|grid + row + cell)."""
+    row_els = _rows_in_role_table(table_el)
+    if len(row_els) < 2:
+        return None
+
+    columns: List[str] = []
+    rows: List[List[str]] = []
+
+    for idx, row_el in enumerate(row_els):
+        cell_els = row_el.xpath(
+            './*[@role="cell" or @role="columnheader" or @role="rowheader" or @role="gridcell"]'
+        )
+        if not cell_els:
+            cell_els = _direct_element_children(row_el)
+        cell_texts = [_text_or_empty(c) for c in cell_els]
+        if not any(cell_texts):
+            continue
+
+        is_header_row = (
+            idx == 0
+            and (
+                any(_role(c) == "columnheader" for c in cell_els)
+                or row_el.get("aria-rowindex") == "1"
+            )
+        )
+        if is_header_row and not columns:
+            columns = cell_texts
+            continue
+        rows.append(cell_texts)
+
+    if not rows:
+        return None
+    if not columns and rows:
+        columns = rows.pop(0)
+    return _finalize_table(columns, rows, source="aria")
+
+
+def _tailwind_row_children(container_el) -> List[Any]:
+    """Direct children that look like grid/table rows."""
+    children = _direct_element_children(container_el)
+    grid_rows = [c for c in children if _has_grid_cols(c)]
+    if len(grid_rows) >= 2:
+        return grid_rows
+    if _has_table_class_hint(container_el) and len(children) >= 2:
+        return children
+    return []
+
+
+def _extract_tailwind_grid_table(container_el) -> Optional[Dict[str, Any]]:
+    """Parse div-based Tailwind/shadcn grids (grid-cols-N + divide-y)."""
+    row_els = _tailwind_row_children(container_el)
+    if len(row_els) < 2:
+        return None
+
+    row_data: List[List[str]] = []
+    col_counts: List[int] = []
+    for row_el in row_els:
+        cells = _direct_element_children(row_el)
+        if not cells:
+            continue
+        texts = [_text_or_empty(c) for c in cells]
+        if any(texts):
+            row_data.append(texts)
+            col_counts.append(len(texts))
+
+    if len(row_data) < 2 or len(set(col_counts)) != 1 or col_counts[0] < 2:
+        return None
+
+    columns = row_data[0]
+    data_rows = row_data[1:]
+    return _finalize_table(columns, data_rows, source="tailwind")
+
+
+def _extract_pseudo_table(container_el) -> Optional[Dict[str, Any]]:
+    """Fallback: repeated .row / .Box-row siblings with uniform cell count."""
+    row_els = [
+        c
+        for c in _direct_element_children(container_el)
+        if _ROW_CLASS_RE.search(_element_class(c))
+    ]
+    if len(row_els) < 2:
+        return None
+
+    row_data: List[List[str]] = []
+    col_counts: List[int] = []
+    for row_el in row_els:
+        cells = _direct_element_children(row_el)
+        if not cells:
+            texts = [_text_or_empty(row_el)]
+        else:
+            texts = [_text_or_empty(c) for c in cells]
+        if any(texts):
+            row_data.append(texts)
+            col_counts.append(len(texts))
+
+    if len(row_data) < 2 or len(set(col_counts)) != 1 or col_counts[0] < 2:
+        return None
+
+    columns = [f"col_{i + 1}" for i in range(col_counts[0])]
+    return _finalize_table(columns, row_data, source="pseudo")
+
+
+def _is_inside_native_table(el) -> bool:
+    return bool(el.xpath("ancestor::table"))
+
+
+def _is_inside_claimed_table(el, claimed: set[int]) -> bool:
+    for anc in el.iterancestors():
+        if id(anc) in claimed:
+            return True
+    return False
+
+
+def _collect_table_roots(tree) -> List[tuple[Any, str]]:
+    """Find native, ARIA, Tailwind, and pseudo-table roots (deduped)."""
+    roots: List[tuple[Any, str]] = []
+    claimed: set[int] = set()
+
+    for table_el in tree.xpath("//table"):
+        roots.append((table_el, "native"))
+        claimed.add(id(table_el))
+
+    for el in tree.xpath('//*[@role="table" or @role="grid"]'):
+        if id(el) in claimed or _is_inside_native_table(el):
+            continue
+        if _is_inside_claimed_table(el, claimed):
+            continue
+        roots.append((el, "aria"))
+        claimed.add(id(el))
+
+    for el in tree.iter():
+        if not isinstance(el.tag, str) or el.tag not in ("div", "section"):
+            continue
+        if id(el) in claimed or _is_inside_native_table(el) or _is_inside_claimed_table(el, claimed):
+            continue
+        if len(_tailwind_row_children(el)) >= 2:
+            roots.append((el, "tailwind"))
+            claimed.add(id(el))
+
+    for el in tree.iter():
+        if not isinstance(el.tag, str):
+            continue
+        if id(el) in claimed or _is_inside_native_table(el) or _is_inside_claimed_table(el, claimed):
+            continue
+        row_children = [
+            c for c in _direct_element_children(el) if _ROW_CLASS_RE.search(_element_class(c))
+        ]
+        if len(row_children) >= 2:
+            roots.append((el, "pseudo"))
+            claimed.add(id(el))
+
+    return roots
+
+
+def _extract_table_from_root(root_el, kind: str) -> Optional[Dict[str, Any]]:
+    if kind == "native":
+        return _extract_table(root_el)
+    if kind == "aria":
+        return _extract_role_table(root_el)
+    if kind == "tailwind":
+        return _extract_tailwind_grid_table(root_el)
+    if kind == "pseudo":
+        return _extract_pseudo_table(root_el)
+    return None
+
+
+def _parse_tables_from_tree(tree, max_rows: Optional[int] = None) -> List[Dict[str, Any]]:
+    tables: List[Dict[str, Any]] = []
+    seen_signatures: set[tuple] = set()
+
+    for root_el, kind in _collect_table_roots(tree):
+        parsed = _extract_table_from_root(root_el, kind)
+        if not parsed:
+            continue
+        sig = (parsed.get("source"), tuple(parsed.get("columns") or []), parsed.get("total_rows"))
+        if sig in seen_signatures:
+            continue
+        seen_signatures.add(sig)
+        tables.append(_apply_max_rows(parsed, max_rows))
+
+    return tables
+
 
 def _extract_table(table_el) -> Dict[str, Any]:
     """Parse a single <table> element into column schema + rows."""
@@ -204,13 +482,15 @@ def _extract_table(table_el) -> Dict[str, Any]:
     else:
         types = ["string"] * len(columns)
 
-    return {
+    result = {
         "columns": columns,
         "types": types,
         "rows": rows,
         "total_rows": len(rows),
         "column_count": len(columns),
+        "source": "native",
     }
+    return result
 
 
 def parse_tables(html: str, max_rows: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -227,7 +507,7 @@ def parse_tables(html: str, max_rows: Optional[int] = None) -> List[Dict[str, An
     tree = _parse_html(html)
     if tree is None:
         return []
-    return [_apply_max_rows(_extract_table(t), max_rows) for t in tree.xpath("//table")]
+    return _parse_tables_from_tree(tree, max_rows)
 
 
 # -- Form parsing ---------------------------------------------------------------
@@ -478,7 +758,7 @@ def parse_page(html: str, max_rows: Optional[int] = None) -> Dict[str, Any]:
     if tree is None:
         return {"tables": [], "forms": [], "lists": []}
     return {
-        "tables": [_apply_max_rows(_extract_table(t), max_rows) for t in tree.xpath("//table")],
+        "tables": _parse_tables_from_tree(tree, max_rows),
         "forms": [_extract_form(f) for f in tree.xpath("//form")],
         "lists": _parse_lists_from_tree(tree),
     }

@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/schemasnap.svg)](https://pypi.org/project/schemasnap/)
 [![Python](https://img.shields.io/pypi/pyversions/schemasnap.svg)](https://pypi.org/project/schemasnap/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![tests](https://img.shields.io/badge/tests-54%20passed-brightgreen)](https://github.com/ulinycoin/schemasnap/actions)
+[![tests](https://img.shields.io/badge/tests-62%20passed-brightgreen)](https://github.com/ulinycoin/schemasnap/actions)
 
 **HTML → typed tables, forms, lists as JSON. 30ms, no key, no browser.**
 
@@ -97,7 +97,7 @@ curl -X POST https://schemasnap-464919960073.us-central1.run.app/v1/compress \
 
 ## Features
 
-- **Tables** → columns, types (`string|integer|number|currency|percentage|date|email|url`), rows, total_rows
+- **Tables** → columns, types (`string|integer|number|currency|percentage|date|email|url`), rows — from `<table>`, ARIA `role=table|grid`, Tailwind grids, or `.row` pseudo-tables
 - **Forms** → action, method, fields with `name`, `type`, `label`, `required`, `placeholder`, `pattern`, `minlength`, select `options`
 - **Lists** → type (`unordered|ordered|select`), items, total
 - **Semantic groups** → "Login Form", "Navigation", "Checkout", "Search" auto-detected
