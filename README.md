@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/schemasnap.svg)](https://pypi.org/project/schemasnap/)
 [![Python](https://img.shields.io/pypi/pyversions/schemasnap.svg)](https://pypi.org/project/schemasnap/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![tests](https://img.shields.io/badge/tests-62%20passed-brightgreen)](https://github.com/ulinycoin/schemasnap/actions)
+[![tests](https://img.shields.io/badge/tests-68%20passed-brightgreen)](https://github.com/ulinycoin/schemasnap/actions)
 
 **HTML → typed tables, forms, lists as JSON. 30ms, no key, no browser.**
 
