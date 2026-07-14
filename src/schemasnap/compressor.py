@@ -21,7 +21,7 @@ REMOVE_TAGS = {
 KEEP_ATTRS = {
     'href', 'src', 'alt', 'type', 'value', 'placeholder',
     'name', 'for', 'action', 'method', 'aria-label',
-    'data-sid',
+    'data-sid', 'class', 'role',
 }
 
 # Interactive tag types
