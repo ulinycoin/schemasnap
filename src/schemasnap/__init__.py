@@ -39,4 +39,4 @@ __all__ = [
     "export_table_csv",
 ]
 
-__version__ = "0.1.8"
+__version__ = "0.1.9"

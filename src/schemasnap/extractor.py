@@ -247,8 +247,12 @@ def extract_from_url(
                 result.actions = action_map
                 result.action_count = len(action_map)
 
-                # SchemaSnap extraction (on clean HTML for better accuracy)
-                structured = parse_page(clean_html, max_rows=max_rows_per_table)
+                # SchemaSnap extraction runs on the RAW html, not on clean_html.
+                # The compressor strips id/class to save tokens, which destroys
+                # label[for] association and other attribute-driven structure
+                # (parse_forms would hand the first sibling label to every
+                # field). Compression is for the action map and token budget.
+                structured = parse_page(raw_html, max_rows=max_rows_per_table)
                 result.tables = structured["tables"]
                 result.forms = structured["forms"]
                 result.lists = structured["lists"]
@@ -273,7 +277,9 @@ def extract_from_html(
     """
     Extract structured data from raw HTML string (no browser).
 
-    Pipeline: compress → SchemaSnap extract. Stateless, fast.
+    Pipeline: compress (action map + token budget) → SchemaSnap extract.
+    Structure is parsed from the raw HTML: the compressor drops id/class, and
+    form labels resolved through label[for] need those attributes.
     """
     t0 = time.monotonic()
     result = ExtractResult(url=url or "(inline HTML)")
@@ -290,7 +296,7 @@ def extract_from_html(
         result.actions = action_map
         result.action_count = len(action_map)
 
-        structured = parse_page(clean_html, max_rows=max_rows_per_table)
+        structured = parse_page(html, max_rows=max_rows_per_table)
         result.tables = structured["tables"]
         result.forms = structured["forms"]
         result.lists = structured["lists"]

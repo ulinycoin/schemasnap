@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "schemasnap"
-version = "0.1.8"
+version = "0.1.9"
 description = "Structured data extraction from any URL — tables, forms, lists as JSON. No API key needed."
 readme = "README.md"
 license = "MIT"

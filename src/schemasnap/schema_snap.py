@@ -27,10 +27,18 @@ _SAFE_PARSER = lxml_html.HTMLParser(no_network=True)
 
 
 def _parse_html(html: str):
-    """Parse HTML string into lxml tree. Returns None for empty input."""
-    if not html or not html.strip():
+    """Parse HTML string into lxml tree. Returns None for unusable input.
+
+    Empty, whitespace-only, comment-only and non-string input all return None
+    instead of raising: callers treat "nothing to parse" as an empty result.
+    """
+    if not html or not isinstance(html, str) or not html.strip():
         return None
-    return lxml_html.fromstring(html, parser=_SAFE_PARSER)
+    try:
+        return lxml_html.fromstring(html, parser=_SAFE_PARSER)
+    except (etree.ParserError, ValueError):
+        # A comment-only or otherwise rootless document.
+        return None
 
 
 # -- Text helpers ---------------------------------------------------------------
@@ -42,10 +50,52 @@ def _clean(text: Optional[str]) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# Inline markers of a hidden subtree. Admin UIs routinely park menus, tooltips
+# and sort dropdowns inside a header/body cell with display:none, and
+# text_content() would otherwise splice that hidden text into the value
+# ("Id" + "Ascending" + "Descending" -> "IdAscendingDescending").
+_HIDDEN_STYLE_RE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
+
+
+def _is_hidden(el) -> bool:
+    if el.get("hidden") is not None:
+        return True
+    if (el.get("aria-hidden") or "").lower() == "true":
+        return True
+    return bool(_HIDDEN_STYLE_RE.search(el.get("style") or ""))
+
+
+def _visible_text(el) -> str:
+    """Text of an element with hidden subtrees dropped, parts joined by a space.
+
+    text_content() glues sibling block elements together ("City" + "Berlin"
+    -> "CityBerlin") and pulls in display:none menus. Both corrupt cell values,
+    so the walk is explicit. Leaf nodes take a C-level fast path: most cells
+    have no child elements, and the Python walk dominates parse time otherwise.
+    """
+    if el is None:
+        return ""
+    if len(el) == 0:
+        return _clean(el.text or "")
+    parts: List[str] = []
+
+    def walk(node) -> None:
+        if node.text:
+            parts.append(node.text)
+        for child in node.iterchildren():
+            if isinstance(child.tag, str) and not _is_hidden(child):
+                walk(child)
+            if child.tail:
+                parts.append(child.tail)
+
+    walk(el)
+    return _clean(" ".join(parts))
+
+
 def _text_or_empty(el) -> str:
     if el is None:
         return ""
-    return _clean(el.text_content())
+    return _visible_text(el)
 
 
 def _li_item_text(li_el) -> str:
@@ -90,6 +140,7 @@ def _infer_column_type(values: List[str]) -> str:
     date_like = 0
     email_like = 0
     url_like = 0
+    identifier_like = 0
     has_currency = False
     has_percent = False
     all_int = True
@@ -102,6 +153,13 @@ def _infer_column_type(values: List[str]) -> str:
             has_currency = True
         if "%" in val:
             has_percent = True
+
+        # A leading zero means an identifier, not a number: "0406" must stay a
+        # string, otherwise coercion drops the zero and the id changes meaning.
+        if re.fullmatch(r"0\d+", val):
+            identifier_like += 1
+            all_int = False
+            continue
 
         # Try numeric
         cleaned = val.replace(",", "").replace("$", "").replace("\u20ac", "").replace("\u00a3", "").replace("%", "").strip()
@@ -133,6 +191,8 @@ def _infer_column_type(values: List[str]) -> str:
         if all_int:
             return "integer"
         return "number"
+    if identifier_like / total >= 0.6:
+        return "string"
     if date_like / total >= 0.6:
         return "date"
     if email_like / total >= 0.6:
@@ -180,31 +240,39 @@ def _finalize_table(
     rows: List[List[str]],
     *,
     source: str = "native",
+    min_cols: int = 2,
+    row_kinds: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Normalize dimensions, infer types, attach source metadata."""
-    if not rows and not columns:
+    """Normalize dimensions, infer types, attach source metadata.
+
+    Returns None when there are no data rows: an empty or header-only <table>
+    is page furniture, not a dataset, and used to surface as a phantom table
+    with zero columns.
+    """
+    if not rows:
         return None
 
     max_row_len = max((len(row) for row in rows), default=0)
     max_cols = max(max_row_len, len(columns))
-    if max_cols < 2:
+    if max_cols < min_cols:
         return None
 
+    columns = list(columns)
     if columns:
         while len(columns) < max_cols:
             columns.append(f"column_{len(columns) + 1}")
-    elif rows:
-        columns = [f"col_{i + 1}" for i in range(max_cols)]
     else:
-        return None
+        columns = [f"col_{i + 1}" for i in range(max_cols)]
+
+    # Rectangular data: short rows get empty cells instead of shifting columns.
+    widths = {len(row) for row in rows}
+    if widths != {max_cols}:
+        rows = [list(row) + [""] * (max_cols - len(row)) for row in rows]
 
     types: List[str] = []
-    if columns and rows:
-        for col_idx in range(len(columns)):
-            col_values = [row[col_idx] if col_idx < len(row) else "" for row in rows]
-            types.append(_infer_column_type(col_values))
-    else:
-        types = ["string"] * len(columns)
+    for col_idx in range(len(columns)):
+        col_values = [row[col_idx] if col_idx < len(row) else "" for row in rows]
+        types.append(_infer_column_type(col_values))
 
     return {
         "columns": columns,
@@ -212,6 +280,7 @@ def _finalize_table(
         "rows": rows,
         "total_rows": len(rows),
         "column_count": len(columns),
+        "row_kinds": list(row_kinds) if row_kinds else ["data"] * len(rows),
         "source": source,
     }
 
@@ -230,11 +299,21 @@ def _row_cells_from_element(row_el) -> List[str]:
 
 
 def _rows_in_role_table(table_el) -> List[Any]:
-    """Collect role=row elements scoped to one table/grid root."""
+    """Collect role=row elements scoped to one table/grid root.
+
+    A row belongs to its *nearest* table/grid ancestor. Unlike a real <table>,
+    a div grid gives no reliable cell boundary, so a grid rendered inside a
+    cell is sub-layout of that cell: its text stays in the outer row and the
+    nested root is not reported as a second table (the root collector skips
+    roots nested inside a claimed one).
+    """
     scoped: List[Any] = []
     for row in table_el.xpath('.//*[@role="row"]'):
-        ancestors = row.xpath('ancestor::*[@role="table" or @role="grid"]')
-        if ancestors and ancestors[0] is table_el:
+        nearest = next(
+            (anc for anc in row.iterancestors() if _role(anc) in _TABLE_ROLES),
+            None,
+        )
+        if nearest is table_el:
             scoped.append(row)
     return scoped
 
@@ -242,7 +321,7 @@ def _rows_in_role_table(table_el) -> List[Any]:
 def _extract_role_table(table_el) -> Optional[Dict[str, Any]]:
     """Parse ARIA table/grid (role=table|grid + row + cell)."""
     row_els = _rows_in_role_table(table_el)
-    if len(row_els) < 2:
+    if not row_els:
         return None
 
     columns: List[str] = []
@@ -272,9 +351,14 @@ def _extract_role_table(table_el) -> Optional[Dict[str, Any]]:
 
     if not rows:
         return None
-    if not columns and rows:
-        columns = rows.pop(0)
-    return _finalize_table(columns, rows, source="aria")
+    if not columns:
+        # No columnheader row was found: every row carries data, so name the
+        # columns generically instead of consuming the first row as a header.
+        width = max(len(row) for row in rows)
+        columns = [f"col_{i + 1}" for i in range(width)]
+    # min_cols=1: role=table/grid is explicit semantics, and a one-column grid
+    # is a legitimate dataset.
+    return _finalize_table(columns, rows, source="aria", min_cols=1)
 
 
 def _tailwind_row_children(container_el) -> List[Any]:
@@ -408,89 +492,193 @@ def _extract_table_from_root(root_el, kind: str) -> Optional[Dict[str, Any]]:
 
 def _parse_tables_from_tree(tree, max_rows: Optional[int] = None) -> List[Dict[str, Any]]:
     tables: List[Dict[str, Any]] = []
-    seen_signatures: set[tuple] = set()
 
+    # No content-based de-duplication here. Roots are already unique (each is
+    # claimed once by _collect_table_roots), while a signature over
+    # (source, columns, total_rows) silently dropped a second, genuinely
+    # different table that happened to share a header and a row count.
     for root_el, kind in _collect_table_roots(tree):
         parsed = _extract_table_from_root(root_el, kind)
         if not parsed:
             continue
-        sig = (parsed.get("source"), tuple(parsed.get("columns") or []), parsed.get("total_rows"))
-        if sig in seen_signatures:
-            continue
-        seen_signatures.add(sig)
         tables.append(_apply_max_rows(parsed, max_rows))
 
     return tables
 
 
-def _extract_table(table_el) -> Dict[str, Any]:
+def _span_int(el, attr: str) -> int:
+    """colspan/rowspan as a positive int (1 when absent or malformed)."""
+    raw = (el.get(attr) or "").strip()
+    if not raw.isdigit():
+        return 1
+    return max(1, int(raw))
+
+
+def _own_table_rows(table_el) -> List[Any]:
+    """<tr> elements belonging to this table, nested tables excluded.
+
+    ``.//tr`` crosses nested <table> boundaries: the inner table's rows then
+    become rows of every ancestor, which both duplicates data and shifts the
+    outer table's columns. Ownership is decided by the *nearest* table
+    ancestor, so ``iterancestors()`` is used instead of the ``ancestor::``
+    XPath axis (lxml returns that axis in document order, outermost first).
+    """
+    rows: List[Any] = []
+    for tr in table_el.iterfind(".//tr"):
+        owner = next((a for a in tr.iterancestors() if a.tag == "table"), None)
+        if owner is not table_el:
+            continue
+        rows.append(tr)
+    return rows
+
+
+def _grid_from_rows(row_els: List[Any], *, repeat_spans: bool = False) -> List[List[str]]:
+    """Expand colspan/rowspan into a rectangular text grid.
+
+    Data cells keep the value in the first spanned slot and leave the others
+    empty, so column indexes never shift. Header cells repeat the label across
+    a colspan (a "Sales" banner over Q1 and Q2 names both columns).
+    rowspan values are carried into the following rows either way.
+    """
+    grid: List[List[str]] = []
+    carry: Dict[int, tuple] = {}  # column index -> (text, rows left)
+
+    for tr in row_els:
+        cell_els = tr.xpath("./td | ./th")
+        texts = [_text_or_empty(cell) for cell in cell_els]
+        spans = [
+            (_span_int(cell, "colspan"), _span_int(cell, "rowspan"))
+            for cell in cell_els
+        ]
+
+        row: List[str] = []
+        col = 0
+        cell_idx = 0
+        while cell_idx < len(texts) or (carry and col <= max(carry)):
+            if col in carry:
+                text, rows_left = carry[col]
+                row.append(text)
+                if rows_left <= 1:
+                    del carry[col]
+                else:
+                    carry[col] = (text, rows_left - 1)
+                col += 1
+                continue
+            if cell_idx >= len(texts):
+                row.append("")
+                col += 1
+                continue
+
+            text = texts[cell_idx]
+            colspan, rowspan = spans[cell_idx]
+            cell_idx += 1
+            for offset in range(colspan):
+                slot_text = text if (offset == 0 or repeat_spans) else ""
+                row.append(slot_text)
+                if rowspan > 1:
+                    carry[col + offset] = (slot_text, rowspan - 1)
+            col += colspan
+
+        grid.append(row)
+
+    return grid
+
+
+def _pad_grid(grid: List[List[str]]) -> List[List[str]]:
+    width = max((len(row) for row in grid), default=0)
+    return [row + [""] * (width - len(row)) for row in grid]
+
+
+def _header_names(header_grid: List[List[str]], width: int) -> List[str]:
+    """Stack a multi-row header into one name per column ("Sales / Q1").
+
+    A label repeated in consecutive header rows (rowspan) is written once.
+    """
+    names: List[str] = []
+    for col_idx in range(width):
+        parts: List[str] = []
+        for row in header_grid:
+            value = (row[col_idx] if col_idx < len(row) else "").strip()
+            if value and (not parts or parts[-1] != value):
+                parts.append(value)
+        names.append(" / ".join(parts))
+    return names
+
+
+def _looks_vertical(row_els: List[Any]) -> bool:
+    """True for "field -> value" tables (infoboxes, spec sheets).
+
+    Their first cell of every row is a <th> label with <td> values next to it.
+    Treating the first row as a horizontal header silently deletes that row and
+    names the columns after one arbitrary pair.
+    """
+    pairs = 0
+    for tr in row_els:
+        cells = tr.xpath("./td | ./th")
+        if len(cells) >= 2 and cells[0].tag == "th" and any(c.tag == "td" for c in cells[1:]):
+            pairs += 1
+    return pairs >= max(2, int(len(row_els) * 0.6))
+
+
+def _extract_table(table_el) -> Optional[Dict[str, Any]]:
     """Parse a single <table> element into column schema + rows."""
+    row_els = _own_table_rows(table_el)
+    if not row_els:
+        return None
 
-    # -- Extract headers --
+    # -- Header rows. <thead> wins; without it, the leading run of rows built
+    #    only from <th> is the header (multi-row headers are kept as a grid so
+    #    colspan/rowspan survive). A "field -> value" table has no header row.
+    header_els: List[Any] = []
     thead = table_el.find(".//thead")
-    columns: List[str] = []
     if thead is not None:
-        for th in thead.iterfind(".//th"):
-            columns.append(_text_or_empty(th))
+        header_els = [tr for tr in row_els if tr.xpath("ancestor::thead")]
     else:
-        # Fallback: first <tr> that's not in <tbody>
-        first_tr = table_el.find(".//tr")
-        if first_tr is not None:
-            parent = first_tr.getparent()
-            if parent is not None and parent.tag != "tbody":
-                for cell in first_tr.iterfind("th"):
-                    columns.append(_text_or_empty(cell))
-                if not columns:
-                    for cell in first_tr.iterfind("td"):
-                        columns.append(_text_or_empty(cell))
+        for tr in row_els:
+            cells = tr.xpath("./td | ./th")
+            if not cells or not all(cell.tag == "th" for cell in cells):
+                break
+            header_els.append(tr)
 
-    # -- Extract rows (include <th> in body cells too) --
+    vertical = not header_els and _looks_vertical(row_els)
+
+    header_ids = {id(tr) for tr in header_els}
+    data_els = [tr for tr in row_els if id(tr) not in header_ids]
+
+    header_grid = _pad_grid(_grid_from_rows(header_els, repeat_spans=True)) if header_els else []
+    data_grid = _grid_from_rows(data_els)
+
+    width = max(
+        [len(row) for row in header_grid] + [len(row) for row in data_grid] + [0]
+    )
+    if width == 0:
+        return None
+
+    if header_grid:
+        columns = [
+            name or f"col_{idx + 1}"
+            for idx, name in enumerate(_header_names(header_grid, width))
+        ]
+    elif vertical and width == 2:
+        columns = ["Field", "Value"]
+    else:
+        columns = [f"col_{idx + 1}" for idx in range(width)]
+
+    # -- Data rows: drop blank rows, mark full-width single-cell section rows
+    #    (a band like "Q1 2026" inside <tbody> that groups the rows below).
     rows: List[List[str]] = []
-    tbody = table_el.find(".//tbody")
-    if tbody is not None:
-        tr_elements = list(tbody.iterfind(".//tr"))
-    else:
-        tr_elements = list(table_el.iterfind(".//tr"))
-        if thead is not None:
-            header_trs = set(thead.iterfind(".//tr"))
-            tr_elements = [tr for tr in tr_elements if tr not in header_trs]
+    row_kinds: List[str] = []
+    for raw_row in data_grid:
+        row = list(raw_row) + [""] * (width - len(raw_row))
+        filled = [cell for cell in row if cell.strip()]
+        if not filled:
+            continue
+        rows.append(row)
+        row_kinds.append("section" if len(filled) == 1 and width > 1 else "data")
 
-    for tr in tr_elements:
-        row = []
-        for cell in tr.xpath("./td | ./th"):
-            row.append(_text_or_empty(cell))
-        if row:
-            rows.append(row)
-
-    # -- Normalize column count (max across ALL rows, not just first) --
-    max_row_len = max(len(row) for row in rows) if rows else 0
-    max_cols = max(max_row_len, len(columns))
-    if columns:
-        while len(columns) < max_cols:
-            columns.append(f"column_{len(columns) + 1}")
-
-    # -- Auto-generate column names if table has none --
-    if not columns and rows:
-        columns = [f"col_{i + 1}" for i in range(max_cols)]
-
-    # -- Infer types per column --
-    types: List[str] = []
-    if columns and rows:
-        for col_idx in range(len(columns)):
-            col_values = [row[col_idx] if col_idx < len(row) else "" for row in rows]
-            types.append(_infer_column_type(col_values))
-    else:
-        types = ["string"] * len(columns)
-
-    result = {
-        "columns": columns,
-        "types": types,
-        "rows": rows,
-        "total_rows": len(rows),
-        "column_count": len(columns),
-        "source": "native",
-    }
-    return result
+    return _finalize_table(
+        columns, rows, source="native", min_cols=1, row_kinds=row_kinds
+    )
 
 
 def parse_tables(html: str, max_rows: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -574,14 +762,21 @@ def _extract_label(form_el, field_el) -> str:
                 return cleaned
         parent = parent.getparent()
 
-    # Sibling <label> (e.g. checkbox then <label>Subscribe</label>)
+    # Sibling <label> (e.g. checkbox then <label>Subscribe</label>).
+    # A label that points at a *different* control through `for` must not be
+    # borrowed. Without this check, a pipeline that hands us HTML with ids
+    # stripped gives every field the first label on the page.
     parent = field_el.getparent()
     if parent is not None:
         for sibling in parent.iterchildren():
-            if sibling.tag == "label" and sibling is not field_el:
-                text = _text_or_empty(sibling)
-                if text:
-                    return text
+            if sibling.tag != "label" or sibling is field_el:
+                continue
+            target = (sibling.get("for") or "").strip()
+            if target and target != field_id:
+                continue
+            text = _text_or_empty(sibling)
+            if text:
+                return text
 
     # Fallback: placeholder or name
     placeholder = _clean(field_el.get("placeholder"))
