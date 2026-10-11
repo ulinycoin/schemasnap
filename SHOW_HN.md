@@ -90,9 +90,12 @@ pip install schemasnap
 pip install "schemasnap[mcp]"
 ```
 
-**Live API (500 requests/day per IP, no authentication required):**
+**Run the API locally (no hosted endpoint, no auth):**
 ```bash
-curl -X POST https://schemasnap-464919960073.us-central1.run.app/v1/compress \
+pip install "schemasnap[server]" && uvicorn schemasnap.server:app --port 8000
+```
+```bash
+curl -X POST http://127.0.0.1:8000/v1/compress \
   -H "Content-Type: application/json" \
   -d '{"html":"<table><thead><tr><th>Product</th><th>Price</th><th>Stock</th></tr></thead><tbody><tr><td>Widget</td><td>$19.99</td><td>150</td></tr></tbody></table>"}'
 ```

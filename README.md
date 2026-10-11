@@ -10,7 +10,10 @@
 Born from [shadow-web](https://github.com/ulinycoin/shadow-web)'s SchemaSnap module. A parse primitive — not a scraper, not a crawler. Feed it HTML, get structured data.
 
 ```bash
-curl -X POST https://schemasnap-464919960073.us-central1.run.app/v1/compress \
+pip install "schemasnap[server]"
+uvicorn schemasnap.server:app --port 8000 &
+
+curl -X POST http://127.0.0.1:8000/v1/compress \
   -H "Content-Type: application/json" \
   -d '{"html":"<table><thead><tr><th>Product</th><th>Price</th><th>Stock</th></tr></thead><tbody><tr><td>Widget</td><td>$19.99</td><td>150</td></tr></tbody></table>"}'
 ```
@@ -20,14 +23,21 @@ curl -X POST https://schemasnap-464919960073.us-central1.run.app/v1/compress \
   "rows":[["Widget","$19.99","150"]]}]}
 ```
 
-## Live API
+## Self-hosted API
 
-| Endpoint | Rate limit | Auth |
-|----------|-----------|------|
-| `POST /v1/compress` — HTML → structured JSON | 500 req/day per IP | None |
-| `GET /v1/health` | Unlimited | None |
+There is **no hosted endpoint** — the Cloud Run deployment was retired in October 2026.
+Run it yourself; it is two commands:
 
-**Base URL:** `https://schemasnap-464919960073.us-central1.run.app`
+```bash
+pip install "schemasnap[server]"
+uvicorn schemasnap.server:app --port 8000
+```
+
+| Endpoint | Auth | Notes |
+|----------|------|-------|
+| `POST /v1/compress` — HTML → structured JSON | none by default | stateless, pure `lxml`, ~30 ms |
+| `GET /v1/health` | none | reads `__version__` from the package |
+| `POST /v1/extract` — URL → structured JSON | — | off unless you set `DISABLE_EXTRACT=0`; needs Playwright |
 
 ## Quick install
 
@@ -80,7 +90,7 @@ Add to Cursor **Settings → MCP**:
 ### curl (no Python needed)
 
 ```bash
-curl -X POST https://schemasnap-464919960073.us-central1.run.app/v1/compress \
+curl -X POST http://127.0.0.1:8000/v1/compress \
   -H "Content-Type: application/json" \
   -d '{"html": "<table>...your html...</table>"}'
 ```
@@ -93,7 +103,7 @@ curl -X POST https://schemasnap-464919960073.us-central1.run.app/v1/compress \
 | W3Schools Tables | 212 KB | 87 KB | 59% | 34ms |
 | Hacker News | 35 KB | 24 KB | 32% | 23ms |
 
-*Measured on Cloud Run (us-central1), July 2026. Cold start ~250ms.*
+*Measured July 2026 on a 1 vCPU / 256 MB instance (Cloud Run, us-central1), Python 3.12. Cold start ~250 ms — irrelevant when you call the library in-process.*
 
 ## Features
 
