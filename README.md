@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/schemasnap.svg)](https://pypi.org/project/schemasnap/)
 [![Python](https://img.shields.io/pypi/pyversions/schemasnap.svg)](https://pypi.org/project/schemasnap/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![tests](https://img.shields.io/badge/tests-68%20passed-brightgreen)](https://github.com/ulinycoin/schemasnap/actions)
+[![tests](https://img.shields.io/badge/tests-100%20passed-brightgreen)](https://github.com/ulinycoin/schemasnap/actions)
 
 **HTML → typed tables, forms, lists as JSON. 30ms, no key, no browser.**
 
@@ -130,13 +130,17 @@ Composable: `Firecrawl fetch → SchemaSnap parse`. Or `curl → SchemaSnap pars
 
 ## Relationship to shadow-web
 
-SchemaSnap started as `schema_snap.py` inside [shadow-web](https://github.com/ulinycoin/shadow-web) — a broader agent-facing web interaction suite. This standalone version:
+SchemaSnap started as `schema_snap.py` inside [shadow-web](https://github.com/ulinycoin/shadow-web) — a broader agent-facing web interaction suite.
 
-- Adds MCP server (`compress_html` tool) for Cursor / Claude Desktop
-- Inlines semantic grouping (no external dependency)
-- Fixes tree mutation bug during tag removal
-- Adds deterministic type inference (8 types)
-- Hardened for public API (SSRF guard, rate limiting, oversize protection)
+Since 0.1.9 the direction is reversed: **this package is the implementation** and shadow-web depends on it (`schemasnap>=0.1.9`). Its `shadow_web.schema_snap` module is now a thin facade that re-exports these functions and keeps shadow-web's historic `source` vocabulary (`table`/`aria_grid`). One core, two facades, so a fix lands once.
+
+What this standalone package adds on top of that module:
+
+- MCP server (`compress_html` tool) for Cursor / Claude Desktop
+- Tailwind and `.row` pseudo-table planes, plus ARIA `role=table|grid`
+- Stacked multi-row headers with `colspan`/`rowspan` normalisation
+- Deterministic type inference (8 types), zero-padded ids kept as strings
+- Hardened for a public API (SSRF guard, rate limiting, oversize protection)
 
 ## License
 
