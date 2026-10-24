@@ -12,7 +12,7 @@
 - [x] Rate limiter with LRU-like pruning
 - [x] Unit tests for compressor + schema extraction
 - [x] Integration test for full extract_from_url pipeline
-- [x] pyproject.toml, README, ROADMAP, CLAUDE.md
+- [x] pyproject.toml, README, ROADMAP, AGENTS.md
 
 ## Phase 2: Validation (Week 2-3)
 
